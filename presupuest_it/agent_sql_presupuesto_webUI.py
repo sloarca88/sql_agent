@@ -1,6 +1,6 @@
 """
 SQL Agent Pipeline – Presupuesto
-Autor: Sergio Loarca
+Autor: Sergio Loarca - sloarca88@gmail.com
 Descripción: Pipeline Text-to-SQL con OpenAI GPT y PostgreSQL.
              Genera la consulta SQL, la ejecuta y formatea la respuesta
              directamente como tabla Markdown (sin reenviar datos al LLM).
