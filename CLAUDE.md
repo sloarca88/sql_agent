@@ -64,16 +64,32 @@ sql-agents/
 │   │   └── presupuesto.md          ← Schema, vistas autorizadas y reglas
 │   └── observabilidad.md           ← Descripción de la BD de observabilidad
 │
+├── sql/                            ← DDL de vistas que los agentes consultan
+│   ├── boletas_worki/              ← Objetos SQL del agente boletas (SQL Server)
+│   │   └── vw_boletas_pago.sql
+│   ├── presupuesto/                ← Objetos SQL del agente presupuesto (PostgreSQL)
+│   │   ├── vw_presupuesto_mensual.sql
+│   │   └── vw_resumen_anual.sql
+│   └── shared/                     ← Objetos SQL compartidos entre agentes
+│       └── observabilidad/
+│           └── create_agent_log.sql
+│
 ├── .github/
 │   └── PULL_REQUEST_TEMPLATE.md
 │
 ├── .gitignore
+├── CHANGELOG.md
 ├── CLAUDE.md                       ← Este archivo
 └── README.md
 ```
 
 > **Regla de estructura:** cada agente nuevo sigue exactamente este patrón.
 > No crear subcarpetas dentro de `agents/` — cada pipeline es un archivo único.
+
+> **Regla carpeta `sql/`:** contiene únicamente DDL de vistas que los agentes
+> consultan (CREATE VIEW, comentarios de columnas). No incluir ETL,
+> procedimientos de carga, transformaciones ni objetos de otras capas.
+> Al agregar un agente nuevo, crear su subcarpeta `sql/<nombre>/` correspondiente.
 
 ---
 
@@ -322,6 +338,23 @@ Ejemplos correctos:
 - Nunca eliminar las reglas de `PROMPT INJECTION DEFENSE` ni `ALLOWED STATEMENTS`
 - Si se agregan reglas nuevas, mantener la numeración existente o renumerar todo
 - Hacer commit separado solo para cambios de system_prompt con tipo `security` o `feat`
+
+### Al actualizar CHANGELOG.md
+- Actualizar únicamente al completar una funcionalidad, corrección importante o
+  cambio de versión — no en cada commit individual
+- Formato de entrada:
+  ```markdown
+  ## [sin versión] - YYYY-MM-DD
+  ### Agregado
+  - descripción del cambio
+  ### Corregido
+  - descripción del fix
+  ### Cambiado
+  - descripción de modificación
+  ```
+- Claude Code puede proponer la entrada al terminar una tarea,
+  pero debe ser aprobada antes de hacer commit
+- Commit asociado: `docs(changelog): registrar [descripción breve del cambio]`
 
 ---
 
