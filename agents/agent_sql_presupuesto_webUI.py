@@ -46,7 +46,9 @@ NO requiere drivers ODBC — psycopg2 conecta directamente a PostgreSQL.
 """
 
 import os
+import io
 import re
+import csv
 import json
 import traceback
 import decimal
@@ -217,10 +219,13 @@ class Pipeline:
         # ── LLM ───────────────────────────────────────────────────────────────
         OPENAI_API_KEY:      SecretStr
         TEXT_TO_SQL_MODEL:   str
+        # ── Comportamiento de resultados ──────────────────────────────────────
+        RESULT_DISPLAY_LIMIT: int  = 100   # Máximo de filas a renderizar en OpenWebUI
+        ENABLE_CSV_EXPORT:    bool = False  # Adjuntar CSV completo cuando supera el límite (validar compatibilidad con OpenWebUI antes de activar)
 
     def __init__(self):
         self.name             = "SQL Agent Presupuesto"
-        self.pipeline_version = "1.0.0"   # Actualizar en cada despliegue
+        self.pipeline_version = "1.1.0"   # Actualizar en cada despliegue
         self.conn             = None       # Conexión BD de negocio
         self.obs_conn         = None       # Conexión BD de observabilidad
         self.last_sql         = ""
@@ -241,8 +246,10 @@ class Pipeline:
                 "OBS_DATABASE":      os.getenv("OBS_DB_DATABASE",               "observabilidad_db"),
                 "OBS_USER":          os.getenv("OBS_DB_USER",                   ""),
                 "OBS_PASSWORD":      os.getenv("OBS_DB_PASSWORD",               ""),
-                "OPENAI_API_KEY":    os.getenv("OPENAI_API_KEY_DISA",                ""),
-                "TEXT_TO_SQL_MODEL": os.getenv("PRESUPUESTO_TEXT_TO_SQL_MODEL", "gpt-4o"),
+                "OPENAI_API_KEY":       os.getenv("OPENAI_API_KEY_DISA",                    ""),
+                "TEXT_TO_SQL_MODEL":    os.getenv("PRESUPUESTO_TEXT_TO_SQL_MODEL",    "gpt-4o"),
+                "RESULT_DISPLAY_LIMIT": int(os.getenv("PRESUPUESTO_RESULT_DISPLAY_LIMIT", "100")),
+                "ENABLE_CSV_EXPORT":    os.getenv("PRESUPUESTO_ENABLE_CSV_EXPORT", "false").lower() == "true",
             }
         )
 
@@ -764,6 +771,23 @@ SQLQuery:
     # FORMATEO DE RESULTADOS COMO TABLA MARKDOWN
     # ==========================================================================
 
+    def _generate_csv(self, rows: List[dict]) -> str:
+        """
+        Genera el contenido de un archivo CSV a partir de una lista de dicts.
+        Usado cuando ENABLE_CSV_EXPORT es True y el resultado supera RESULT_DISPLAY_LIMIT.
+        Retorna el CSV como string (encabezado + filas).
+        """
+        output = io.StringIO()
+        writer = csv.DictWriter(
+            output,
+            fieldnames=list(rows[0].keys()),
+            extrasaction="ignore",
+            lineterminator="\n",
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+        return output.getvalue()
+
     def _format_markdown_table(self, rows: List[dict]) -> str:
         """Convierte una lista de dicts en una tabla Markdown."""
         if not rows:
@@ -800,6 +824,12 @@ SQLQuery:
         Recibe los resultados de la consulta SQL y los formatea como tabla Markdown.
         Los datos NO se reenvían al LLM (privacidad y control de tokens).
         Nunca expone detalles técnicos de BD al usuario.
+
+        Truncado de resultados:
+          - Si total_rows <= RESULT_DISPLAY_LIMIT → tabla completa.
+          - Si total_rows >  RESULT_DISPLAY_LIMIT → se muestran las primeras N filas
+            con un aviso informativo. Si ENABLE_CSV_EXPORT es True, se adjunta el CSV
+            completo como bloque de código (validar compatibilidad con OpenWebUI).
         """
         # Respuesta de error semántico del agente SQL (campo error_message)
         if rows and isinstance(rows[0], dict) and "error_message" in rows[0]:
@@ -809,10 +839,32 @@ SQLQuery:
         if not rows:
             return "No se encontró información que coincida con tu consulta."
 
-        row_count = len(rows)
-        table     = self._format_markdown_table(rows)
-        header    = f"Se encontraron **{row_count} registro(s)**.\n\n"
-        return header + table
+        total_rows = len(rows)
+        limit      = self.valves.RESULT_DISPLAY_LIMIT
+
+        if total_rows > limit:
+            rows_to_show = rows[:limit]
+            header = (
+                f"> Se encontraron **{total_rows:,} registros**. "
+                f"Se muestran los primeros **{limit:,}**.\n"
+                f"> Para ver menos resultados, reformula tu pregunta agregando "
+                f"filtros adicionales (por año, mes, categoría u otras columnas disponibles).\n\n"
+            )
+            table = self._format_markdown_table(rows_to_show)
+
+            if self.valves.ENABLE_CSV_EXPORT:
+                csv_content = self._generate_csv(rows)
+                csv_block = (
+                    f"\n\n---\n"
+                    f"**Datos completos ({total_rows:,} registros) en formato CSV:**\n"
+                    f"```csv\n{csv_content}```"
+                )
+                return header + table + csv_block
+
+            return header + table
+
+        header = f"Se encontraron **{total_rows:,} registro(s)**.\n\n"
+        return header + self._format_markdown_table(rows)
 
     # ==========================================================================
     # MÉTODO PRINCIPAL – REQUERIDO POR OPENWEBUI
