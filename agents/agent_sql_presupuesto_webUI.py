@@ -50,6 +50,7 @@ import io
 import re
 import csv
 import json
+import base64
 import traceback
 import decimal
 from datetime import date, datetime
@@ -221,7 +222,8 @@ class Pipeline:
         TEXT_TO_SQL_MODEL:   str
         # ── Comportamiento de resultados ──────────────────────────────────────
         RESULT_DISPLAY_LIMIT: int  = 100   # Máximo de filas a renderizar en OpenWebUI
-        ENABLE_CSV_EXPORT:    bool = False  # Adjuntar CSV completo cuando supera el límite (validar compatibilidad con OpenWebUI antes de activar)
+        ENABLE_CSV_EXPORT:    bool = False  # Habilitar link de descarga CSV cuando supera el límite
+        CSV_EXPORT_MAX_ROWS:  int  = 5000  # Cap de filas incluidas en el CSV (evita data URIs excesivamente grandes)
 
     def __init__(self):
         self.name             = "SQL Agent Presupuesto"
@@ -249,7 +251,8 @@ class Pipeline:
                 "OPENAI_API_KEY":       os.getenv("OPENAI_API_KEY_DISA",                    ""),
                 "TEXT_TO_SQL_MODEL":    os.getenv("PRESUPUESTO_TEXT_TO_SQL_MODEL",    "gpt-4o"),
                 "RESULT_DISPLAY_LIMIT": int(os.getenv("PRESUPUESTO_RESULT_DISPLAY_LIMIT", "100")),
-                "ENABLE_CSV_EXPORT":    os.getenv("PRESUPUESTO_ENABLE_CSV_EXPORT", "false").lower() == "true",
+                "ENABLE_CSV_EXPORT":    os.getenv("PRESUPUESTO_ENABLE_CSV_EXPORT",    "false").lower() == "true",
+                "CSV_EXPORT_MAX_ROWS":  int(os.getenv("PRESUPUESTO_CSV_EXPORT_MAX_ROWS", "5000")),
             }
         )
 
@@ -828,8 +831,9 @@ SQLQuery:
         Truncado de resultados:
           - Si total_rows <= RESULT_DISPLAY_LIMIT → tabla completa.
           - Si total_rows >  RESULT_DISPLAY_LIMIT → se muestran las primeras N filas
-            con un aviso informativo. Si ENABLE_CSV_EXPORT es True, se adjunta el CSV
-            completo como bloque de código (validar compatibilidad con OpenWebUI).
+            con un aviso informativo. Si ENABLE_CSV_EXPORT es True, se agrega un link
+            de descarga con data URI (base64) — el contenido NO se renderiza en el chat.
+            CSV_EXPORT_MAX_ROWS limita cuántas filas se incluyen en el archivo descargable.
         """
         # Respuesta de error semántico del agente SQL (campo error_message)
         if rows and isinstance(rows[0], dict) and "error_message" in rows[0]:
@@ -853,13 +857,21 @@ SQLQuery:
             table = self._format_markdown_table(rows_to_show)
 
             if self.valves.ENABLE_CSV_EXPORT:
-                csv_content = self._generate_csv(rows)
-                csv_block = (
-                    f"\n\n---\n"
-                    f"**Datos completos ({total_rows:,} registros) en formato CSV:**\n"
-                    f"```csv\n{csv_content}```"
+                # Limitar filas del CSV para no generar data URIs excesivamente grandes
+                csv_rows     = rows[:self.valves.CSV_EXPORT_MAX_ROWS]
+                csv_content  = self._generate_csv(csv_rows)
+                csv_b64      = base64.b64encode(csv_content.encode("utf-8")).decode("ascii")
+                csv_row_note = (
+                    f"{len(csv_rows):,} de {total_rows:,}"
+                    if len(csv_rows) < total_rows
+                    else f"{total_rows:,}"
                 )
-                return header + table + csv_block
+                # Data URI → el navegador descarga el archivo sin renderizar el contenido en el chat
+                download_link = (
+                    f"\n\n[⬇ Descargar CSV ({csv_row_note} registros)]"
+                    f"(data:text/csv;charset=utf-8;base64,{csv_b64})"
+                )
+                return header + table + download_link
 
             return header + table
 
